@@ -1,10 +1,18 @@
 import { load } from "cheerio";
 import { parse } from "url";
 import { basename } from "path";
+import { mkdir, existsSync } from "fs";
 
 const seenUrls: Set<string> = new Set<string>();
 const errorUrls: Set<string> = new Set<string>();
-const seenImageUrls: Set<string> = new Set<string>();
+const seenImageUrls: Record<string, string> = {};
+
+const SEEN_URLS_PATH = `${import.meta.dir}/seenUrls.json`;
+const ERROR_URLS_PATH = `${import.meta.dir}/errorUrls.json`;
+const SEEN_IMAGE_URLS_PATH = `${import.meta.dir}/seenImageUrls.json`;
+
+const IMAGES_DIR_PATH = `${import.meta.dir}/images`;
+const IMAGE_EXT = ["jpg", "jpeg", "png"];
 
 function normalizeUrl(link: string, host: string, protocol: string): string {
   if (link.includes("http")) return link;
@@ -16,9 +24,7 @@ async function downloadImages(
   imageLinks: string[],
   host: string,
   protocol: string
-) {
-  const IMAGE_EXT = ["jpg", "jpeg", "png", "gif"];
-
+): Promise<void> {
   for (let i = 0; i < imageLinks.length; i++) {
     const imageLink = imageLinks[i];
     const imageUrl = normalizeUrl(imageLink, host, protocol);
@@ -29,7 +35,7 @@ async function downloadImages(
     if (!ext || !IMAGE_EXT.includes(ext)) continue;
 
     let imageUrlRef = filename;
-    if (seenImageUrls.has(imageUrlRef)) {
+    if (seenImageUrls[imageUrlRef]) {
       const filenameWithoutExt = imageUrlRef.replace(`.${ext}`, "");
       imageUrlRef = `${imageUrlRef.replace(
         filenameWithoutExt,
@@ -37,15 +43,46 @@ async function downloadImages(
       )}`;
     }
 
-    console.log("Downloading Image:", filename, "as", imageUrlRef);
-    const response = await fetch(imageUrl);
-    const arrayBuffer = await response.arrayBuffer();
-    await Bun.write(`./images/${imageUrlRef}`, arrayBuffer);
-    seenImageUrls.add(imageUrlRef);
+    let arrayBuffer: ArrayBuffer;
+    try {
+      console.log("Downloading Image:", filename, "as", imageUrlRef);
+      const response = await fetch(imageUrl, {
+        tls: {
+          rejectUnauthorized: false,
+        },
+      });
+      arrayBuffer = await response.arrayBuffer();
+    } catch (e) {
+      console.error(e);
+      console.error(`Error: Downloading image ${imageUrl} as ${imageUrlRef}`);
+      return;
+    }
+
+    const filePath = `${IMAGES_DIR_PATH}/${imageUrlRef}`;
+    try {
+      if (!existsSync(IMAGES_DIR_PATH)) {
+        mkdir(IMAGES_DIR_PATH, () => console.info("Created images directory"));
+      }
+
+      await Bun.write(filePath, arrayBuffer);
+      seenImageUrls[imageUrlRef] = imageUrl;
+    } catch (e) {
+      console.error(e);
+      console.error(
+        `Error: Saving image ${imageUrl} as ${imageUrlRef} to ${filePath}`
+      );
+      return;
+    }
   }
 }
 
-async function crawl({ url, ignore }: { url: string; ignore?: string }) {
+async function crawl({
+  url,
+  ignore,
+}: {
+  url: string;
+  ignore?: string;
+}): Promise<void> {
   if (seenUrls.has(url)) return;
 
   console.log("Crawling", url);
@@ -55,7 +92,11 @@ async function crawl({ url, ignore }: { url: string; ignore?: string }) {
   if (!host || !protocol) return;
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      tls: {
+        rejectUnauthorized: false,
+      },
+    });
     const html = await response.text();
 
     const $ = load(html);
@@ -81,22 +122,35 @@ async function crawl({ url, ignore }: { url: string; ignore?: string }) {
       });
     }
   } catch (e) {
+    console.error(e);
     console.error(`Error: Crawling ${url}`);
     errorUrls.add(url);
   }
 }
 
-async function main() {
-  await crawl({ url: "https://github.com/" });
+async function main(): Promise<void> {
+  process.on("SIGINT", async () => {
+    console.log(`\nSaving crawled websites history to ${SEEN_URLS_PATH}`);
+    console.log(`Saving error urls history to ${ERROR_URLS_PATH}`);
+    console.log(`Saving downloaded images history to ${SEEN_IMAGE_URLS_PATH}`);
+
+    await Promise.all([
+      Bun.write(SEEN_URLS_PATH, JSON.stringify([...seenUrls], null, 2)),
+      Bun.write(ERROR_URLS_PATH, JSON.stringify([...errorUrls], null, 2)),
+      Bun.write(SEEN_IMAGE_URLS_PATH, JSON.stringify(seenImageUrls, null, 2)),
+    ]);
+
+    console.log("Exiting process...");
+    process.exit();
+  });
+
+  await crawl({ url: "https://google.com/" });
   await Promise.all([
-    Bun.write("./seenUrls.json", JSON.stringify([...seenUrls], null, 2)),
-    Bun.write("./errorUrls.json", JSON.stringify([...errorUrls], null, 2)),
-    Bun.write(
-      "./seenImageUrls.json",
-      JSON.stringify([...seenImageUrls], null, 2)
-    ),
+    Bun.write(SEEN_URLS_PATH, JSON.stringify([...seenUrls], null, 2)),
+    Bun.write(ERROR_URLS_PATH, JSON.stringify([...errorUrls], null, 2)),
+    Bun.write(SEEN_IMAGE_URLS_PATH, JSON.stringify(seenImageUrls, null, 2)),
   ]);
+  console.log("Done");
 }
 
 await main();
-console.log("Done");
