@@ -2,6 +2,10 @@
   "name": "spidy",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+    "start": "bun run index.ts",
+    "clean": "rm -rf images/* && rm seenUrls.json errorUrls.json seenImageUrls.json"
+  },
   "devDependencies": {
     "bun-types": "latest"
   },
