@@ -1,7 +1,7 @@
 import { load } from "cheerio";
 import { parse } from "url";
 import { basename } from "path";
-import { mkdir, existsSync } from "fs";
+import { mkdir, existsSync, createWriteStream } from "fs";
 
 const seenUrls: Set<string> = new Set<string>();
 const errorUrls: Set<string> = new Set<string>();
@@ -43,10 +43,10 @@ async function downloadImages(
       )}`;
     }
 
-    let arrayBuffer: ArrayBuffer;
+    let response: Response;
     try {
       console.log("Downloading Image:", filename, "as", imageUrlRef);
-      const response = await fetch(imageUrl, {
+      response = await fetch(imageUrl, {
         tls: {
           rejectUnauthorized: false,
         },
@@ -58,8 +58,6 @@ async function downloadImages(
         );
         continue;
       }
-
-      arrayBuffer = await response.arrayBuffer();
     } catch (e) {
       console.error(e);
       console.error(`Error: Downloading image ${imageUrl} as ${imageUrlRef}`);
@@ -72,7 +70,14 @@ async function downloadImages(
         mkdir(IMAGES_DIR_PATH, () => console.info("Created images directory"));
       }
 
-      await Bun.write(filePath, arrayBuffer);
+      const writeStream = createWriteStream(filePath);
+      const writableStream = new WritableStream({
+        write(chunk) {
+          writeStream.write(chunk);
+        },
+      });
+      response.body?.pipeTo(writableStream);
+
       seenImageUrls[imageUrlRef] = imageUrl;
     } catch (e) {
       console.error(e);
@@ -123,7 +128,7 @@ async function crawl({
       .map((_, link) => link.attribs.src)
       .get();
 
-    await downloadImages(imageLinks, host, protocol);
+    downloadImages(imageLinks, host, protocol);
 
     for (let i = 0; i < links.length; i++) {
       const link = links[i];
@@ -131,7 +136,7 @@ async function crawl({
       const b = basename(link);
       if (!link.includes(host) || (ignore && b.includes(ignore))) continue;
 
-      await crawl({
+      crawl({
         url: normalizeUrl(link, host, protocol),
         ignore,
       });
@@ -144,6 +149,16 @@ async function crawl({
 }
 
 async function main(): Promise<void> {
+  process.on("beforeExit", async () => {
+    await Promise.all([
+      Bun.write(SEEN_URLS_PATH, JSON.stringify([...seenUrls], null, 2)),
+      Bun.write(ERROR_URLS_PATH, JSON.stringify([...errorUrls], null, 2)),
+      Bun.write(SEEN_IMAGE_URLS_PATH, JSON.stringify(seenImageUrls, null, 2)),
+    ]);
+  });
+
+  process.on("exit", () => console.log("Done!"));
+
   process.on("SIGINT", async () => {
     console.log(`\nSaving crawled websites history to ${SEEN_URLS_PATH}`);
     console.log(`Saving error urls history to ${ERROR_URLS_PATH}`);
@@ -156,16 +171,10 @@ async function main(): Promise<void> {
     ]);
 
     console.log("Exiting process...");
-    process.exit();
+    process.exit(0);
   });
 
   await crawl({ url: "https://google.com/" });
-  await Promise.all([
-    Bun.write(SEEN_URLS_PATH, JSON.stringify([...seenUrls], null, 2)),
-    Bun.write(ERROR_URLS_PATH, JSON.stringify([...errorUrls], null, 2)),
-    Bun.write(SEEN_IMAGE_URLS_PATH, JSON.stringify(seenImageUrls, null, 2)),
-  ]);
-  console.log("Done");
 }
 
 await main();
