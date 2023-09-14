@@ -30,7 +30,7 @@ async function downloadImages(
     const imageUrl = normalizeUrl(imageLink, host, protocol);
 
     const filename = basename(imageUrl);
-    const ext = filename.split(".").pop();
+    const ext = filename.split(".").pop()?.toLowerCase();
 
     if (!ext || !IMAGE_EXT.includes(ext)) continue;
 
