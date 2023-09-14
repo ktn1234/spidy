@@ -51,11 +51,19 @@ async function downloadImages(
           rejectUnauthorized: false,
         },
       });
+
+      if (response.status !== 200) {
+        console.error(
+          `Error: Downloading image ${imageUrl} as ${imageUrlRef} with status ${response.status}`
+        );
+        continue;
+      }
+
       arrayBuffer = await response.arrayBuffer();
     } catch (e) {
       console.error(e);
       console.error(`Error: Downloading image ${imageUrl} as ${imageUrlRef}`);
-      return;
+      continue;
     }
 
     const filePath = `${IMAGES_DIR_PATH}/${imageUrlRef}`;
@@ -71,7 +79,7 @@ async function downloadImages(
       console.error(
         `Error: Saving image ${imageUrl} as ${imageUrlRef} to ${filePath}`
       );
-      return;
+      continue;
     }
   }
 }
@@ -97,6 +105,13 @@ async function crawl({
         rejectUnauthorized: false,
       },
     });
+
+    if (response.status !== 200) {
+      console.error(`Error: Crawling ${url} with status ${response.status}`);
+      errorUrls.add(url);
+      return;
+    }
+
     const html = await response.text();
 
     const $ = load(html);
